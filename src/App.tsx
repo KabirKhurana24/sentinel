@@ -1,3 +1,259 @@
+import { useEffect, useState } from 'react'
+import type { User } from '@supabase/supabase-js'
+import { supabase, isSupabaseConfigured } from './lib/supabase'
+import {
+  Activity, AlertOctagon, AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight,
+  Bell, Bot, Check, CheckCheck, CheckCircle2, ChevronDown, ChevronLeft,
+  ChevronRight, CircleHelp, Clock3, Download, Ellipsis, Eye, EyeOff, FileCheck2,
+  Filter, Fingerprint, Gauge, GitBranch, KeyRound, LayoutDashboard, ListChecks,
+  LockKeyhole, LogOut, Menu, Plus, RefreshCw, Search, Shield,
+  ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, Users, X, Zap,
+} from 'lucide-react'
+
+type OwnerStatus = 'Active' | 'Departed' | 'Unknown'
+type AgentStatus = 'Active' | 'Suspended' | 'Inactive'
+type Agent = {
+  id: string; name: string; type: string; platform: string; owner: string; ownerStatus: OwnerStatus;
+  team: string; environment: string; status: AgentStatus; risk: number; riskLevel: 'Critical' | 'High' | 'Medium' | 'Low';
+  lastActive: string; daysInactive: number; scopes: string[]; resources: string[]; credential: string;
+  discovery: string; created: string; notes: string; reviewed: boolean; flags: string[];
+}
+type Event = { id: number; action: string; target: string; actor: string; time: string; detail: string; tone: 'danger' | 'success' | 'info' | 'warning' }
+type Review = { id: string; title: string; target: string; reviewer: string; due: string; priority: string; status: 'Pending' | 'Approved' | 'Completed'; reason: string }
+type NavKey = 'overview' | 'inventory' | 'risk' | 'reviews' | 'audit'
+
+const seedAgents: Agent[] = [
+  { id:'AG-1042', name:'Deal Desk Copilot', type:'AI Agent', platform:'Azure AI Foundry', owner:'Daniel Brooks', ownerStatus:'Departed', team:'Revenue Operations', environment:'Production', status:'Active', risk:96, riskLevel:'Critical', lastActive:'Today, 09:42', daysInactive:0, scopes:['Salesforce: Admin','SharePoint: Read','Contract Vault: Read'], resources:['Salesforce','SharePoint','Contract Vault'], credential:'OAuth service principal', discovery:'Microsoft Entra ID', created:'18 Feb 2026', notes:'Created for contract review automation. Owner account was disabled 12 days ago; agent identity remains active.', reviewed:false, flags:['Owner departed','Admin privilege','Sensitive contract data'] },
+  { id:'AG-1038', name:'Finance Reconciliation Bot', type:'Service Account', platform:'Custom / Python', owner:'Marcus Lee', ownerStatus:'Active', team:'Finance', environment:'Production', status:'Active', risk:91, riskLevel:'Critical', lastActive:'118 days ago', daysInactive:118, scopes:['NetSuite: Admin','Stripe: Write','S3 Finance: Read'], resources:['NetSuite','Stripe','AWS S3'], credential:'API key + client secret', discovery:'AWS IAM', created:'04 Nov 2025', notes:'No successful activity in 118 days. Broad write access remains configured across finance systems.', reviewed:false, flags:['Dormant >90 days','Admin privilege','Financial systems'] },
+  { id:'AG-1029', name:'Support Triage Agent', type:'AI Agent', platform:'OpenAI Assistants', owner:'Emily Carter', ownerStatus:'Departed', team:'Customer Experience', environment:'Production', status:'Active', risk:88, riskLevel:'High', lastActive:'Yesterday, 18:10', daysInactive:0, scopes:['Zendesk: Admin','Customer DB: Read'], resources:['Zendesk','Customer Database'], credential:'OAuth app', discovery:'Okta + SaaS connector', created:'09 Jan 2026', notes:'Owner left the company. Agent is still active and can read customer records.', reviewed:false, flags:['Owner departed','Customer PII access'] },
+  { id:'AG-1024', name:'Hiring Insights Assistant', type:'AI Agent', platform:'Microsoft Copilot Studio', owner:'Sophia Chen', ownerStatus:'Active', team:'People Operations', environment:'Production', status:'Active', risk:78, riskLevel:'High', lastActive:'Today, 08:22', daysInactive:0, scopes:['Workday: Read','SharePoint HR: Read','Entra ID: User.Read.All'], resources:['Workday','SharePoint HR','Microsoft Entra ID'], credential:'Managed identity', discovery:'Microsoft Entra ID', created:'21 Mar 2026', notes:'Access to employee records is broader than the current use case requires.', reviewed:false, flags:['Sensitive employee data','Broad directory scope'] },
+  { id:'AG-1019', name:'Warehouse Sync Worker', type:'Service Account', platform:'AWS Lambda', owner:'Unassigned', ownerStatus:'Unknown', team:'Data Platform', environment:'Production', status:'Active', risk:82, riskLevel:'High', lastActive:'4 days ago', daysInactive:4, scopes:['Redshift: Admin','S3 Data Lake: Write'], resources:['Amazon Redshift','AWS S3 Data Lake'], credential:'IAM access key', discovery:'AWS IAM', created:'13 Aug 2025', notes:'No accountable human owner is mapped to this identity.', reviewed:false, flags:['Unknown owner','Admin privilege'] },
+  { id:'AG-1014', name:'GitHub Release Orchestrator', type:'AI Agent', platform:'GitHub Actions', owner:'Oliver Grant', ownerStatus:'Active', team:'Engineering', environment:'Production', status:'Active', risk:63, riskLevel:'Medium', lastActive:'Today, 07:56', daysInactive:0, scopes:['GitHub: Repo Admin','Package Registry: Write'], resources:['GitHub','Package Registry'], credential:'GitHub App token', discovery:'GitHub Enterprise', created:'15 Dec 2025', notes:'Repository administration is required for release automation, but the package registry scope should be reviewed.', reviewed:true, flags:['Elevated repository scope'] },
+  { id:'AG-1008', name:'Marketing Content Assistant', type:'AI Agent', platform:'Claude for Work', owner:'Unassigned', ownerStatus:'Unknown', team:'Marketing', environment:'Sandbox', status:'Active', risk:72, riskLevel:'High', lastActive:'2 days ago', daysInactive:2, scopes:['Google Drive: Read','Notion: Read'], resources:['Google Drive','Notion'], credential:'OAuth app', discovery:'Browser + OAuth discovery', created:'02 Apr 2026', notes:'Discovered outside the approved app catalogue. Owner and business purpose are not verified.', reviewed:false, flags:['Shadow AI','Unknown owner'] },
+  { id:'AG-1003', name:'Product Research Agent', type:'AI Agent', platform:'LangGraph / Internal', owner:'Ava Patel', ownerStatus:'Active', team:'Product', environment:'Development', status:'Active', risk:34, riskLevel:'Low', lastActive:'Today, 10:14', daysInactive:0, scopes:['Jira: Read','Confluence: Read'], resources:['Jira','Confluence'], credential:'Vault-managed token', discovery:'Internal agent registry', created:'28 Apr 2026', notes:'Owner and purpose are documented; access is read-only and scoped to product tools.', reviewed:true, flags:[] },
+  { id:'AG-0998', name:'Legacy CRM Data Export', type:'Service Account', platform:'Salesforce Integration', owner:'Noah Williams', ownerStatus:'Active', team:'Sales Operations', environment:'Production', status:'Inactive', risk:54, riskLevel:'Medium', lastActive:'96 days ago', daysInactive:96, scopes:['Salesforce: Export','S3 Archive: Write'], resources:['Salesforce','AWS S3 Archive'], credential:'Connected app secret', discovery:'Salesforce Connected Apps', created:'02 Jun 2025', notes:'Dormant integration with export permissions. Confirm whether downstream reporting still depends on it.', reviewed:false, flags:['Dormant >90 days'] },
+  { id:'AG-0991', name:'Invoice OCR Processor', type:'AI Agent', platform:'Google Vertex AI', owner:'Isabella Moore', ownerStatus:'Active', team:'Accounts Payable', environment:'Production', status:'Active', risk:58, riskLevel:'Medium', lastActive:'Today, 06:49', daysInactive:0, scopes:['Drive AP: Read','NetSuite: Invoice Create'], resources:['Google Drive AP','NetSuite'], credential:'Service account key', discovery:'Google Cloud IAM', created:'11 Jan 2026', notes:'Uses invoice data and has create access in NetSuite. Review the credential rotation date.', reviewed:true, flags:['Financial data access'] },
+  { id:'AG-0985', name:'Customer Health Summarizer', type:'AI Agent', platform:'Azure OpenAI', owner:'Mia Johnson', ownerStatus:'Active', team:'Customer Success', environment:'Production', status:'Active', risk:41, riskLevel:'Low', lastActive:'Yesterday, 16:24', daysInactive:1, scopes:['Salesforce: Read','Gainsight: Read'], resources:['Salesforce','Gainsight'], credential:'Managed identity', discovery:'Microsoft Entra ID', created:'06 May 2026', notes:'Read-only access with a named owner and documented business purpose.', reviewed:true, flags:[] },
+  { id:'AG-0976', name:'Legacy Jenkins Deploy Key', type:'API Token', platform:'Jenkins', owner:'Liam Scott', ownerStatus:'Active', team:'Platform Engineering', environment:'Staging', status:'Active', risk:69, riskLevel:'High', lastActive:'102 days ago', daysInactive:102, scopes:['Kubernetes: Deploy','Container Registry: Write'], resources:['Kubernetes','Container Registry'], credential:'Static API token', discovery:'Secrets scan', created:'19 Sep 2025', notes:'Static token has not rotated in 11 months and the deployment workflow has been migrated.', reviewed:false, flags:['Dormant >90 days','Credential age >180 days'] },
+  { id:'AG-0972', name:'Slack Knowledge Assistant', type:'AI Agent', platform:'Slack AI + Custom App', owner:'Priya Nair', ownerStatus:'Active', team:'People Operations', environment:'Production', status:'Active', risk:47, riskLevel:'Medium', lastActive:'Today, 08:35', daysInactive:0, scopes:['Slack: History Read','Google Drive HR: Read'], resources:['Slack','Google Drive HR'], credential:'OAuth user token', discovery:'Okta + OAuth discovery', created:'17 May 2026', notes:'The assistant can read HR knowledge channels. Confirm that private-channel access is limited to approved sources.', reviewed:false, flags:['Sensitive employee data'] },
+  { id:'AG-0968', name:'Terraform Cloud Provisioner', type:'Service Account', platform:'Terraform Cloud', owner:'Jordan Kim', ownerStatus:'Active', team:'Cloud Infrastructure', environment:'Production', status:'Active', risk:86, riskLevel:'Critical', lastActive:'Today, 06:20', daysInactive:0, scopes:['AWS IAM: AdministratorAccess','Kubernetes: Cluster Admin'], resources:['AWS IAM','Kubernetes'], credential:'OIDC workload identity', discovery:'Terraform Cloud + AWS IAM', created:'03 Oct 2025', notes:'A broad provisioning identity is used by multiple workspaces. Split permissions by environment and workload.', reviewed:false, flags:['Admin privilege','Multiple environments'] },
+  { id:'AG-0962', name:'Legal Contract Extractor', type:'AI Agent', platform:'Azure AI Foundry', owner:'Grace Turner', ownerStatus:'Active', team:'Legal Operations', environment:'Production', status:'Active', risk:61, riskLevel:'Medium', lastActive:'Today, 09:03', daysInactive:0, scopes:['SharePoint Legal: Read','Contract Vault: Read','Docusign: Read'], resources:['SharePoint Legal','Contract Vault','Docusign'], credential:'Managed identity', discovery:'Microsoft Entra ID', created:'09 Jun 2026', notes:'Reads signed agreements and contract metadata. Data retention and external model routing should be confirmed.', reviewed:false, flags:['Sensitive contract data'] },
+  { id:'AG-0954', name:'Analytics Read Replica', type:'Service Account', platform:'Snowflake', owner:'Unassigned', ownerStatus:'Unknown', team:'Analytics', environment:'Production', status:'Active', risk:74, riskLevel:'High', lastActive:'7 days ago', daysInactive:7, scopes:['Snowflake: Read','Customer Warehouse: Read'], resources:['Snowflake','Customer Warehouse'], credential:'Key-pair authentication', discovery:'Snowflake Access History', created:'14 Jul 2025', notes:'Read access spans customer and product schemas, but no accountable owner is recorded.', reviewed:false, flags:['Unknown owner','Customer data access'] },
+  { id:'AG-0948', name:'Browser Meeting Summarizer', type:'AI Agent', platform:'Chrome Extension', owner:'Ethan Cole', ownerStatus:'Active', team:'Sales', environment:'Sandbox', status:'Active', risk:68, riskLevel:'High', lastActive:'Yesterday, 17:12', daysInactive:1, scopes:['Browser: Active Tab Read','Google Calendar: Read','Gmail: Read'], resources:['Chrome Browser','Google Calendar','Gmail'], credential:'OAuth refresh token', discovery:'Browser extension inventory', created:'22 Aug 2026', notes:'A browser extension has broad mailbox permissions. Validate business purpose and approved deployment population.', reviewed:false, flags:['Shadow AI','Broad OAuth scope'] },
+  { id:'AG-0933', name:'Artifact Signing Worker', type:'Service Account', platform:'GitHub Actions + KMS', owner:'Oliver Grant', ownerStatus:'Active', team:'Engineering', environment:'Production', status:'Active', risk:29, riskLevel:'Low', lastActive:'Today, 07:40', daysInactive:0, scopes:['GitHub: Contents Read','AWS KMS: Sign'], resources:['GitHub','AWS KMS'], credential:'OIDC federated role', discovery:'GitHub Enterprise + AWS IAM', created:'12 Feb 2026', notes:'Dedicated signing identity with a narrowly scoped role and a named owner.', reviewed:true, flags:[] },
+  { id:'AG-0920', name:'Vendor Risk Monitor', type:'AI Agent', platform:'LangGraph / Internal', owner:'Mia Johnson', ownerStatus:'Active', team:'Procurement', environment:'Development', status:'Active', risk:38, riskLevel:'Low', lastActive:'Today, 10:02', daysInactive:0, scopes:['Coupa: Read','Vendor Portal: Read'], resources:['Coupa','Vendor Portal'], credential:'Vault-managed token', discovery:'Internal agent registry', created:'02 Sep 2026', notes:'Read-only vendor monitoring workflow with a documented owner and approved data sources.', reviewed:true, flags:[] },
+  { id:'AG-0915', name:'Benefits Helpdesk Assistant', type:'AI Agent', platform:'Microsoft Copilot Studio', owner:'Sophia Chen', ownerStatus:'Active', team:'People Operations', environment:'Production', status:'Active', risk:79, riskLevel:'High', lastActive:'Today, 08:48', daysInactive:0, scopes:['Workday Benefits: Read','SharePoint HR: Read','ServiceNow: Create'], resources:['Workday','SharePoint HR','ServiceNow'], credential:'Managed identity', discovery:'Microsoft Entra ID', created:'25 Sep 2026', notes:'The bot can read benefits information and create HR tickets. Review whether ticket payloads may contain sensitive employee details.', reviewed:false, flags:['Sensitive employee data','Broad directory scope'] },
+]
+const seedEvents: Event[] = [
+  {id:1,action:'Risk detected',target:'Deal Desk Copilot',actor:'Governance Monitor',time:'Today, 09:42',detail:'Owner account disabled while agent identity remained active.',tone:'danger'},
+  {id:2,action:'Access review completed',target:'Product Research Agent',actor:'Ava Patel',time:'Today, 09:18',detail:'Read-only access confirmed for Jira and Confluence.',tone:'success'},
+  {id:3,action:'Dormancy threshold crossed',target:'Finance Reconciliation Bot',actor:'Governance Monitor',time:'Today, 08:55',detail:'No activity detected for 118 days.',tone:'warning'},
+  {id:4,action:'New identity discovered',target:'Marketing Content Assistant',actor:'Discovery Connector',time:'Yesterday, 16:34',detail:'OAuth application discovered through browser and consent signals.',tone:'info'},
+  {id:5,action:'Permission changed',target:'GitHub Release Orchestrator',actor:'Oliver Grant',time:'Yesterday, 14:21',detail:'Package registry write permission added for release automation.',tone:'info'},
+  {id:6,action:'High-privilege identity discovered',target:'Terraform Cloud Provisioner',actor:'Discovery Connector',time:'Yesterday, 12:08',detail:'Administrator permissions found across AWS and Kubernetes.',tone:'danger'},
+  {id:7,action:'Unowned identity detected',target:'Analytics Read Replica',actor:'Governance Monitor',time:'Yesterday, 11:32',detail:'No accountable owner found for a production warehouse identity.',tone:'warning'},
+  {id:8,action:'Credential posture checked',target:'Artifact Signing Worker',actor:'Governance Monitor',time:'Yesterday, 10:14',detail:'Federated workload identity and narrow signing scope confirmed.',tone:'success'},
+]
+const seedReviews: Review[] = [
+  {id:'REV-2081',title:'Departed owner access review',target:'Deal Desk Copilot',reviewer:'Security Operations',due:'Today',priority:'Critical',status:'Pending',reason:'Owner account disabled; agent retains Salesforce admin access.'},
+  {id:'REV-2078',title:'Dormant identity certification',target:'Finance Reconciliation Bot',reviewer:'Finance Systems Owner',due:'Today',priority:'Critical',status:'Pending',reason:'118 days inactive with write permissions to financial systems.'},
+  {id:'REV-2071',title:'Sensitive data scope review',target:'Hiring Insights Assistant',reviewer:'People Systems Admin',due:'Tomorrow',priority:'High',status:'Pending',reason:'Employee records and broad directory scope require certification.'},
+  {id:'REV-2064',title:'Ownership validation',target:'Warehouse Sync Worker',reviewer:'Data Platform Lead',due:'Tomorrow',priority:'High',status:'Pending',reason:'No accountable owner is mapped to the production identity.'},
+  {id:'REV-2061',title:'Infrastructure privilege review',target:'Terraform Cloud Provisioner',reviewer:'Cloud Security Lead',due:'Tomorrow',priority:'Critical',status:'Pending',reason:'Administrator access spans AWS and Kubernetes environments.'},
+  {id:'REV-2057',title:'OAuth scope certification',target:'Browser Meeting Summarizer',reviewer:'IT Security',due:'In 2 days',priority:'High',status:'Pending',reason:'Browser extension requests broad mailbox and calendar permissions.'},
+  {id:'REV-2051',title:'Sensitive data access review',target:'Legal Contract Extractor',reviewer:'Legal Systems Owner',due:'In 3 days',priority:'High',status:'Pending',reason:'Confirm approved contract data sources and model-routing controls.'},
+]
+const riskClass = (level: string) => level.toLowerCase()
+const initials = (name: string) => name.split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase()
+
+const storageKeys = { agents: 'sentinel-agents', events: 'sentinel-events', reviews: 'sentinel-reviews' }
+
+export default function App() {
+  const [authMode,setAuthMode] = useState<'signed-out'|'demo'|'supabase'>('signed-out')
+  const [authUser,setAuthUser] = useState<User|null>(null)
+  const [authReady,setAuthReady] = useState(!isSupabaseConfigured)
+  const [authBusy,setAuthBusy] = useState(false)
+  const [authError,setAuthError] = useState('')
+  const [workspaceId,setWorkspaceId] = useState<string|null>(null)
+  const [workspaceReady,setWorkspaceReady] = useState(false)
+  const [syncStatus,setSyncStatus] = useState<'local'|'syncing'|'synced'|'error'>('local')
+  const [agents,setAgents] = useState<Agent[]>(()=>{ try { const x=localStorage.getItem(storageKeys.agents); return x?JSON.parse(x):seedAgents } catch{return seedAgents} })
+  const [events,setEvents] = useState<Event[]>(()=>{ try { const x=localStorage.getItem(storageKeys.events); return x?JSON.parse(x):seedEvents } catch{return seedEvents} })
+  const [reviews,setReviews] = useState<Review[]>(()=>{ try { const x=localStorage.getItem(storageKeys.reviews); return x?JSON.parse(x):seedReviews } catch{return seedReviews} })
+  const [page,setPage] = useState<NavKey>('overview')
+  const [selected,setSelected] = useState<string|null>(null)
+  const [search,setSearch] = useState('')
+  const [filter,setFilter] = useState('All')
+  const [riskFilter,setRiskFilter] = useState('All')
+  const [showRemediation,setShowRemediation] = useState(false)
+  const [toast,setToast] = useState('')
+  const [mobileNav,setMobileNav] = useState(false)
+  const [showHelp,setShowHelp] = useState(false)
+  const [reviewModal,setReviewModal] = useState(false)
+  const [newReviewTarget,setNewReviewTarget] = useState(seedAgents[0].id)
+
+  useEffect(()=>{
+    if(!supabase){setAuthReady(true);return}
+    let mounted=true
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>{
+      if(!mounted)return
+      const user=session?.user??null
+      setAuthUser(user)
+      setAuthMode(user?'supabase':'signed-out')
+      if(!user){setWorkspaceId(null);setWorkspaceReady(false)}
+    })
+    supabase.auth.getSession().then(({data})=>{
+      if(!mounted)return
+      const user=data.session?.user??null
+      setAuthUser(user)
+      setAuthMode(user?'supabase':'signed-out')
+      setAuthReady(true)
+    }).catch(()=>{if(mounted)setAuthReady(true)})
+    return ()=>{mounted=false;subscription.unsubscribe()}
+  },[])
+
+  useEffect(()=>{
+    if(authMode!=='supabase'||!authUser||!supabase){setWorkspaceId(null);setWorkspaceReady(authMode==='demo');return}
+    const client = supabase
+    let cancelled=false
+    setWorkspaceReady(false)
+    setSyncStatus('syncing')
+    const loadWorkspace=async()=>{
+      try{
+        const {data:bootstrappedId,error:bootstrapError}=await client.rpc('bootstrap_sentinel_workspace')
+        if(bootstrapError)throw bootstrapError
+        const id=String(bootstrappedId)
+        const {data:state,error:stateError}=await client.from('sentinel_demo_state').select('agents,events,reviews').eq('workspace_id',id).maybeSingle()
+        if(stateError)throw stateError
+        let nextAgents=Array.isArray(state?.agents)?state.agents as Agent[]:[]
+        let nextEvents=Array.isArray(state?.events)?state.events as Event[]:[]
+        let nextReviews=Array.isArray(state?.reviews)?state.reviews as Review[]:[]
+        if(!state||nextAgents.length===0){
+          nextAgents=seedAgents;nextEvents=seedEvents;nextReviews=seedReviews
+          const {error:seedError}=await client.from('sentinel_demo_state').upsert({workspace_id:id,agents:nextAgents,events:nextEvents,reviews:nextReviews,updated_at:new Date().toISOString()},{onConflict:'workspace_id'})
+          if(seedError)throw seedError
+        }
+        if(cancelled)return
+        setAgents(nextAgents);setEvents(nextEvents);setReviews(nextReviews);setWorkspaceId(id);setWorkspaceReady(true);setSyncStatus('synced')
+      }catch(error){
+        if(cancelled)return
+        const message=error instanceof Error?error.message:'Unable to load the Sentinel workspace.'
+        setAuthError(`Supabase setup issue: ${message}`)
+        setWorkspaceReady(false)
+        setSyncStatus('error')
+      }
+    }
+    void loadWorkspace()
+    return ()=>{cancelled=true}
+  },[authMode,authUser?.id])
+
+  useEffect(()=>{
+    if(authMode!=='demo')return
+    try{localStorage.setItem(storageKeys.agents,JSON.stringify(agents));localStorage.setItem(storageKeys.events,JSON.stringify(events));localStorage.setItem(storageKeys.reviews,JSON.stringify(reviews))}catch{}
+  },[agents,events,reviews,authMode])
+
+  useEffect(()=>{
+    if(authMode!=='supabase'||!workspaceId||!workspaceReady||!supabase)return
+    const client = supabase
+    let cancelled=false
+    const timeout=window.setTimeout(async()=>{
+      setSyncStatus('syncing')
+      const {error}=await client.from('sentinel_demo_state').upsert({workspace_id:workspaceId,agents,events,reviews,updated_at:new Date().toISOString()},{onConflict:'workspace_id'})
+      if(cancelled)return
+      setSyncStatus(error?'error':'synced')
+      if(error)setToast('Cloud sync failed. Check the Supabase connection.')
+    },450)
+    return ()=>{cancelled=true;window.clearTimeout(timeout)}
+  },[agents,events,reviews,authMode,workspaceId,workspaceReady])
+
+  const signIn=async(email:string,password:string)=>{
+    setAuthError('')
+    if(!supabase){setAuthError('Supabase is not configured yet. Add the project URL and publishable/anon key, or use the local sample workspace below.');return}
+    setAuthBusy(true)
+    try{
+      const {error}=await supabase.auth.signInWithPassword({email:email.trim(),password})
+      if(error)setAuthError(error.message)
+    }catch(error){setAuthError(error instanceof Error?error.message:'Unable to sign in. Check the connection and try again.')}
+    finally{setAuthBusy(false)}
+  }
+  const signOut=async()=>{
+    if(authMode==='supabase'&&supabase)await supabase.auth.signOut()
+    setAuthUser(null);setWorkspaceId(null);setWorkspaceReady(false);setAuthMode('signed-out');setAuthError('');setPage('overview')
+  }
+  const enterDemo=()=>{setAuthError('');setAuthUser(null);setWorkspaceId(null);setAuthMode('demo');setWorkspaceReady(true);setSyncStatus('local')}
+  useEffect(()=>{ if(!toast)return; const t=window.setTimeout(()=>setToast(''),2800); return ()=>window.clearTimeout(t)},[toast])
+
+  if(!authReady)return <div className="auth-loading"><div className="auth-spinner"/><span>Checking your Sentinel session…</span></div>
+  if(authMode==='signed-out')return <LoginScreen configured={isSupabaseConfigured} loading={authBusy} error={authError} onSignIn={signIn} onDemo={enterDemo}/>
+  if(authMode==='supabase'&&!workspaceReady)return <div className="auth-loading"><div className="auth-spinner"/><span>Preparing your secure workspace…</span>{authError&&<p>{authError}</p>}<button className="auth-link-button" onClick={signOut}>Sign out</button></div>
+
+  const selectedAgent = agents.find(a=>a.id===selected) || null
+  const highRisk = agents.filter(a=>a.status!=='Suspended' && (a.riskLevel==='Critical'||a.riskLevel==='High')).length
+  const orphaned = agents.filter(a=>a.ownerStatus!=='Active' && a.status!=='Suspended').length
+  const pending = reviews.filter(r=>r.status==='Pending').length
+  const visibleAgents = agents.filter(a=>{
+    const q=search.toLowerCase()
+    const matches = !q || [a.name,a.owner,a.team,a.platform,a.id].some(v=>v.toLowerCase().includes(q))
+    const statusOk = filter==='All' || (filter==='Orphaned' ? a.ownerStatus!=='Active' : filter==='Dormant' ? a.daysInactive>=90 : filter==='Active' ? a.status==='Active' : filter==='Suspended' ? a.status==='Suspended' : true)
+    const riskOk = riskFilter==='All' || a.riskLevel===riskFilter
+    return matches && statusOk && riskOk
+  })
+  const addEvent = (action:string,target:string,detail:string,tone:Event['tone']='info') => {
+    setEvents(prev=>[{id:Date.now(),action,target,actor:authMode==='supabase'?(authUser?.email||'Workspace Admin'):'Demo Admin',time:'Just now',detail,tone},...prev])
+  }
+  const openAgent=(id:string)=>{setSelected(id);setShowRemediation(false)}
+  const markReviewed=(agent:Agent)=>{
+    setAgents(prev=>prev.map(a=>a.id===agent.id?{...a,reviewed:true}:a))
+    addEvent('Access review completed',agent.name,'Review marked complete in the demo workspace.','success')
+    setToast(`${agent.name} marked as reviewed`)
+  }
+  const simulateOffboarding=()=>{
+    const target=agents.find(a=>a.id==='AG-1014') || agents[5]
+    if(!target)return
+    if(target.ownerStatus==='Departed'){setToast('The offboarding scenario is already active');return}
+    setAgents(prev=>prev.map(a=>a.id===target.id?{...a,owner:'Oliver Grant (Departed)',ownerStatus:'Departed',risk:94,riskLevel:'Critical',flags:[...new Set([...a.flags,'Owner departed','Elevated repository scope'])],reviewed:false}:a))
+    setReviews(prev=>[{id:`REV-${Math.floor(2100+Math.random()*700)}`,title:'Offboarding-triggered agent review',target:target.name,reviewer:'Security Operations',due:'Today',priority:'Critical',status:'Pending',reason:'Owner departure detected while the agent identity is still active.'},...prev])
+    addEvent('Offboarding signal received',target.name,'Owner is now marked as departed; active permissions were left unchanged pending review.','danger')
+    setToast('Scenario added: active agent with a departed owner')
+  }
+  const approveReview=(review:Review)=>{
+    setReviews(prev=>prev.map(r=>r.id===review.id?{...r,status:'Completed'}:r))
+    const agent=agents.find(a=>a.name===review.target)
+    if(agent)setAgents(prev=>prev.map(a=>a.id===agent.id?{...a,reviewed:true}:a))
+    addEvent('Review completed',review.target,`Review ${review.id} completed by ${authMode==='supabase'?(authUser?.email||'Workspace Admin'):'Demo Admin'}. No permissions were changed.`, 'success')
+    setToast(`Review completed for ${review.target}`)
+  }
+  const createReview=()=>{
+    const agent=agents.find(a=>a.id===newReviewTarget)
+    if(!agent)return
+    const review:Review={id:`REV-${Math.floor(2100+Math.random()*700)}`,title:'Ad hoc access certification',target:agent.name,reviewer:'Security Operations',due:'In 3 days',priority:agent.riskLevel==='Critical'?'Critical':agent.riskLevel==='High'?'High':'Normal',status:'Pending',reason:'Manual review initiated by an administrator.'}
+    setReviews(prev=>[review,...prev]);addEvent('Review created',agent.name,`Access certification ${review.id} was created.`, 'info');setReviewModal(false);setToast('Access review created')
+  }
+  const runRemediation=(agent:Agent,actions:string[],newOwner:string)=>{
+    if(!actions.length){setToast('Select at least one remediation step');return}
+    let updated={...agent}
+    if(actions.includes('Reassign owner')){updated.owner=newOwner;updated.ownerStatus='Active';updated.flags=updated.flags.filter(f=>f!=='Owner departed'&&f!=='Unknown owner')}
+    if(actions.includes('Remove admin access')){updated.scopes=updated.scopes.filter(s=>!s.toLowerCase().includes('admin'));updated.flags=updated.flags.filter(f=>f!=='Admin privilege')}
+    if(actions.includes('Rotate credential'))updated.credential='Rotated · Vault-managed'
+    if(actions.includes('Suspend agent'))updated.status='Suspended'
+    const stillOwnerRisk=updated.ownerStatus!=='Active'
+    const stillAdmin=updated.scopes.some(s=>s.toLowerCase().includes('admin'))
+    updated.risk=Math.max(8,Math.min(99,updated.risk-(actions.includes('Reassign owner')?27:0)-(actions.includes('Remove admin access')?25:0)-(actions.includes('Rotate credential')?8:0)-(actions.includes('Suspend agent')?38:0)))
+    updated.riskLevel=updated.risk>=85?'Critical':updated.risk>=65?'High':updated.risk>=40?'Medium':'Low'
+    if(!stillOwnerRisk)updated.flags=updated.flags.filter(f=>f!=='Owner departed'&&f!=='Unknown owner')
+    if(!stillAdmin)updated.flags=updated.flags.filter(f=>f!=='Admin privilege')
+    setAgents(prev=>prev.map(a=>a.id===agent.id?updated:a))
+    addEvent('Remediation simulated',agent.name,`Planned actions: ${actions.join(', ')}. This demo records the intention only; no external system was changed.`, 'success')
+    setShowRemediation(false);setSelected(null);setToast('Remediation recorded in the demo audit trail')
+  }
+  const resetDemo=()=>{setAgents(seedAgents);setEvents(seedEvents);setReviews(seedReviews);setSearch('');setFilter('All');setRiskFilter('All');setSelected(null);setToast('Demo data reset to original state')}
+  const exportCSV=()=>{
+    const rows=[['ID','Name','Type','Platform','Owner','Owner status','Team','Environment','Status','Risk score','Risk level','Last active','Scopes'],...agents.map(a=>[a.id,a.name,a.type,a.platform,a.owner,a.ownerStatus,a.team,a.environment,a.status,String(a.risk),a.riskLevel,a.lastActive,a.scopes.join('; ')])]
+    const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
+    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));const link=document.createElement('a');link.href=url;link.download='sentinel-identity-inventory-demo.csv';link.click();URL.revokeObjectURL(url);setToast('CSV export generated')
+  }
+
+  const navItems:[NavKey,string,any,number][]=[['overview','Overview',LayoutDashboard,0],['inventory','Agent inventory',Bot,0],['risk','Risk queue',ShieldAlert,highRisk],['reviews','Access reviews',FileCheck2,pending],['audit','Audit trail',Activity,0]]
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav?'sidebar-open':''}`}>
       <div className="brand"><div className="brand-mark"><ShieldCheck size={19}/></div><div><div className="brand-name">sentinel</div><div className="brand-sub">AI IDENTITY &amp; GOVERNANCE</div></div><button className="mobile-close icon-button" onClick={()=>setMobileNav(false)}><X size={18}/></button></div>
@@ -126,3 +382,10 @@ function Detail({label,value}:{label:string;value:string}){return <div className
 function RemediationModal({agent,onClose,onApply}:{agent:Agent;onClose:()=>void;onApply:(actions:string[],owner:string)=>void}){
   const [actions,setActions]=useState<string[]>([])
   const [owner,setOwner]=useState('Ava Patel')
+  const [approved,setApproved]=useState(false)
+  const options=[{name:'Reassign owner',desc:'Move accountability to an active employee.',icon:<Users size={16}/>,available:agent.ownerStatus!=='Active'},{name:'Remove admin access',desc:'Remove elevated roles from this identity.',icon:<LockKeyhole size={16}/>,available:agent.flags.includes('Admin privilege')||agent.scopes.some(s=>s.toLowerCase().includes('admin'))},{name:'Rotate credential',desc:'Record a credential rotation request.',icon:<KeyRound size={16}/>,available:true},{name:'Suspend agent',desc:'Disable the identity after impact is reviewed.',icon:<ShieldAlert size={16}/>,available:agent.status!=='Suspended'}]
+  const toggle=(v:string)=>setActions(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v])
+  return <div className="modal-scrim"><div className="modal remediation-modal"><div className="modal-head"><div><span className="eyebrow">REMEDIATION PLANNER</span><h2>Plan a safe response</h2></div><button className="icon-button" onClick={onClose}><X size={18}/></button></div><div className="modal-subtitle">{agent.name} <span>· {agent.id}</span></div><div className="impact-warning"><AlertTriangle size={17}/><div><strong>Review the impact before proceeding</strong><span>Actions below are simulated. Nothing is executed against a live identity provider or application.</span></div></div><div className="modal-label">SELECT REMEDIATION STEPS</div><div className="action-options">{options.filter(x=>x.available).map(o=><button className={`action-option ${actions.includes(o.name)?'action-option-selected':''}`} key={o.name} onClick={()=>toggle(o.name)}><span className="action-option-icon">{o.icon}</span><span><strong>{o.name}</strong><small>{o.desc}</small></span><span className="check-box">{actions.includes(o.name)&&<Check size={13}/>}</span></button>)}</div>{actions.includes('Reassign owner')&&<div className="owner-select-wrap"><label>NEW ACCOUNTABLE OWNER</label><select value={owner} onChange={e=>setOwner(e.target.value)}><option>Ava Patel</option><option>Jordan Kim</option><option>Priya Nair</option><option>Marcus Lee</option><option>Sophia Chen</option></select></div>}<div className="impact-preview"><div><span>Selected steps</span><strong>{actions.length}</strong></div><div><span>Current risk score</span><strong>{agent.risk}/100</strong></div><div><span>Approval</span><strong>Admin required</strong></div></div><label className="approval-confirm"><input type="checkbox" checked={approved} onChange={e=>setApproved(e.target.checked)}/><span>I reviewed the proposed steps and approve this simulated action.</span></label><div className="modal-actions"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={()=>onApply(actions,owner)} disabled={actions.length===0||!approved}>Approve & record <ArrowRight size={15}/></Button></div></div></div>
+}
+function CreateReviewModal({agents,selected,setSelected,onClose,onCreate}:{agents:Agent[];selected:string;setSelected:(v:string)=>void;onClose:()=>void;onCreate:()=>void}){return <div className="modal-scrim"><div className="modal"><div className="modal-head"><div><span className="eyebrow">ACCESS CERTIFICATION</span><h2>Create access review</h2></div><button className="icon-button" onClick={onClose}><X size={18}/></button></div><p className="modal-description">Assign an explicit certification task for an identity. The reviewer and approval are simulated in this prototype.</p><label className="form-label">SELECT IDENTITY</label><select className="modal-select" value={selected} onChange={e=>setSelected(e.target.value)}>{agents.map(a=><option value={a.id} key={a.id}>{a.name} · {a.id}</option>)}</select><div className="modal-actions"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={onCreate}>Create review <ArrowRight size={15}/></Button></div></div></div>}
+function HelpModal({onClose,onReset}:{onClose:()=>void;onReset:()=>void}){return <div className="modal-scrim"><div className="modal help-modal"><div className="modal-head"><div><span className="eyebrow">DEMO GUIDE</span><h2>Explore the workbench</h2></div><button className="icon-button" onClick={onClose}><X size={18}/></button></div><div className="guide-steps"><div><b>01</b><span><strong>Start with the risk queue</strong><small>Open Deal Desk Copilot and inspect its departed owner, elevated permissions, and connected resources.</small></span></div><div><b>02</b><span><strong>Plan a remediation</strong><small>Select reassignment, permission removal, credential rotation, or suspension. The prototype updates the sample workspace state; signed-in changes sync to Supabase.</small></span></div><div><b>03</b><span><strong>Try the offboarding scenario</strong><small>From Overview, simulate a former employee leaving. Watch a new risk signal and review assignment appear.</small></span></div><div><b>04</b><span><strong>Inspect the audit trail</strong><small>Every simulated action is recorded with an actor, timestamp, target, and explanatory detail.</small></span></div></div><div className="guide-note"><ShieldCheck size={17}/><span>All names, organisations, metrics, events, and permissions are fictional sample data. No live CloudEagle, Okta, Entra ID, or AWS integration is present.</span></div><div className="modal-actions"><Button variant="secondary" onClick={onReset}>Reset demo data</Button><Button onClick={onClose}>Got it</Button></div></div></div>}
